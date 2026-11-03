@@ -1,12 +1,16 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
+import hashlib
 import os
 import re
+import secrets
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
 import psycopg
 from psycopg.rows import dict_row
 from werkzeug.security import check_password_hash, generate_password_hash
+
+from mailer import send_password_reset
 
 
 def load_local_env():
@@ -25,6 +29,9 @@ def load_local_env():
 load_local_env()
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-change-this-secret")
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() in {"1", "true", "yes"}
 
 
 def get_db():
@@ -199,9 +206,66 @@ def register():
 @app.route("/recover", methods=["GET", "POST"])
 def recover():
     if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+            flash("Ingresa un correo válido.", "error")
+            return render_template("auth.html", mode="recover")
+        try:
+            with get_db() as db:
+                user = db.execute("SELECT id,email FROM public.users WHERE lower(email)=%s LIMIT 1", (email,)).fetchone()
+                if user:
+                    token = secrets.token_urlsafe(32)
+                    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+                    minutes = max(5, min(1440, int(os.environ.get("PASSWORD_RESET_MINUTES", "30"))))
+                    db.execute("UPDATE public.password_reset_tokens SET used_at=CURRENT_TIMESTAMP WHERE user_id=%s AND used_at IS NULL", (user["id"],))
+                    db.execute(
+                        "INSERT INTO public.password_reset_tokens(user_id,token_hash,expires_at) VALUES(%s,%s,%s)",
+                        (user["id"], token_hash, datetime.now(timezone.utc) + timedelta(minutes=minutes)),
+                    )
+                    base_url = os.environ.get("APP_BASE_URL", request.host_url.rstrip("/")).rstrip("/")
+                    reset_url = f"{base_url}/reset-password/{token}"
+                else:
+                    reset_url = None
+            if user:
+                send_password_reset(user["email"], reset_url)
+        except Exception:
+            app.logger.exception("No fue posible procesar la recuperación de contraseña")
         flash("Si el correo está registrado, recibirás instrucciones para restablecer tu contraseña.", "success")
         return redirect(url_for("login"))
     return render_template("auth.html", mode="recover")
+
+
+@app.route("/reset-password/<token>", methods=["GET", "POST"])
+def reset_password(token):
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest() if len(token) <= 200 else ""
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        confirmation = request.form.get("confirmation", "")
+        if len(password) < 10:
+            flash("La contraseña debe tener al menos 10 caracteres.", "error")
+        elif password != confirmation:
+            flash("Las contraseñas no coinciden.", "error")
+        else:
+            with get_db() as db:
+                reset_token = db.execute(
+                    """SELECT id,user_id FROM public.password_reset_tokens
+                    WHERE token_hash=%s AND used_at IS NULL AND expires_at>CURRENT_TIMESTAMP FOR UPDATE""",
+                    (token_hash,),
+                ).fetchone()
+                if reset_token:
+                    db.execute("UPDATE public.users SET password_hash=%s WHERE id=%s", (generate_password_hash(password), reset_token["user_id"]))
+                    db.execute("UPDATE public.password_reset_tokens SET used_at=CURRENT_TIMESTAMP WHERE id=%s", (reset_token["id"],))
+                    session.clear()
+                    flash("Contraseña actualizada correctamente. Ya puedes iniciar sesión.", "success")
+                    return redirect(url_for("login"))
+            flash("El enlace es inválido, expiró o ya fue utilizado.", "error")
+
+    with get_db() as db:
+        valid = db.execute(
+            "SELECT 1 FROM public.password_reset_tokens WHERE token_hash=%s AND used_at IS NULL AND expires_at>CURRENT_TIMESTAMP",
+            (token_hash,),
+        ).fetchone() is not None
+    return render_template("auth.html", mode="reset", token=token, valid=valid)
 
 
 @app.get("/logout")

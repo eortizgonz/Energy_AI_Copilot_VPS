@@ -1,0 +1,69 @@
+name: energy_ai_copilot_vps
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PGDATABASE}
+      POSTGRES_USER: ${PGUSER}
+      POSTGRES_PASSWORD: ${PGPASSWORD}
+    volumes:
+      - energy_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - energy_backend
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: energy-ai-copilot:latest
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >-
+      sh -c "python setup_predictive_db.py &&
+      exec gunicorn --bind 0.0.0.0:5000 --workers 2 --threads 4 --timeout 120 app:app"
+    ports:
+      - "5060:5000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/login', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - energy_backend
+
+  collector:
+    image: energy-ai-copilot:latest
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+    depends_on:
+      app:
+        condition: service_healthy
+    command: ["python", "collector.py"]
+    networks:
+      - energy_backend
+
+volumes:
+  energy_postgres_data:
+
+networks:
+  energy_backend:
+    driver: bridge

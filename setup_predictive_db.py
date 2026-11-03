@@ -5,9 +5,11 @@ from telemetry_config import MACHINES, USAGE_HOURS_BY_MACHINE, VARIABLES
 
 
 def setup():
-    migration = Path(__file__).with_name("sql").joinpath("001_predictive_telemetry.sql").read_text(encoding="utf-8")
     with get_db() as db:
-        db.execute(migration)
+        migration_dir = Path(__file__).with_name("sql")
+        for migration_path in sorted(migration_dir.glob("*.sql")):
+            db.execute(migration_path.read_text(encoding="utf-8"))
+            print(f"Migración aplicada: {migration_path.name}")
         for code, name, family, area, power in MACHINES:
             machine = db.execute(
                 """INSERT INTO public.machines
