@@ -36,7 +36,7 @@ services:
       sh -c "python setup_predictive_db.py &&
       exec gunicorn --bind 0.0.0.0:5000 --workers 2 --threads 4 --timeout 120 app:app"
     ports:
-      - "5060:5000"
+      - "5080:5000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/login', timeout=5)"]
       interval: 30s

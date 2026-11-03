@@ -79,7 +79,7 @@ El collector usa la conexión PostgreSQL configurada en `.env` y almacena datos 
 
 El archivo `compose.prod.yaml` despliega tres servicios aislados:
 
-- `app`: aplicación Flask servida con Gunicorn en el puerto público `5060`.
+- `app`: aplicación Flask servida con Gunicorn en el puerto público `5080`.
 - `collector`: simulador de telemetría con el intervalo configurado.
 - `db`: PostgreSQL con pgvector, accesible únicamente por la red interna de Docker.
 
@@ -103,7 +103,7 @@ Consultar el arranque y verificar el acceso local:
 
 ```bash
 docker compose --env-file .env.production -f compose.prod.yaml logs -f app collector
-curl http://127.0.0.1:5060/login
+curl http://127.0.0.1:5080/login
 ```
 
 La base de datos, sus tablas y el catálogo inicial de las 10 máquinas se crean
