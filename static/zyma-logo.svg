@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 170" role="img" aria-labelledby="title desc">
+  <title id="title">ZYMA 360</title><desc id="desc">ZYMA 360 Smart Digital Manufacturing</desc>
+  <defs><linearGradient id="blue" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#00428f"/><stop offset="1" stop-color="#008fe8"/></linearGradient></defs>
+  <g fill="none" stroke="url(#blue)" stroke-linecap="round"><path d="M106 50c-8-20 6-39 26-39 21 0 34 16 32 34-2 18-17 31-35 28-14-2-22-12-21-23 1-10 9-17 18-16 8 1 13 7 12 14-1 6-5 9-10 9" stroke-width="10"/></g>
+  <text x="130" y="116" fill="#0755a5" font-family="Arial Black,Arial,sans-serif" font-size="43" font-weight="900" letter-spacing="7" text-anchor="middle">ZYMA</text>
+  <text x="130" y="141" fill="#087bd0" font-family="Arial,sans-serif" font-size="21" font-weight="700" letter-spacing="12" text-anchor="middle">360</text>
+  <text x="130" y="162" fill="#1689d9" font-family="Arial,sans-serif" font-size="8" font-weight="700" letter-spacing="2.6" text-anchor="middle">SMART DIGITAL MANUFACTURING</text>
+</svg>

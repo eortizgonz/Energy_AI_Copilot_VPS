@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% if mode == 'register' %}Crear cuenta{% elif mode == 'recover' %}Recuperar acceso{% else %}Iniciar sesión{% endif %} · ZYMA 360</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='auth.css') }}">
+</head>
+<body>
+  <main class="auth-shell login-only{% if mode == 'register' %} register-view{% endif %}">
+    <section class="auth-panel">
+      <div class="mobile-logo"><img src="{{ url_for('static', filename='zyma-logo.svg') }}" alt="ZYMA 360"><strong>ENERGY AI COPILOT</strong></div>
+      <div class="form-wrap">
+        {% if mode == 'register' %}
+          <span class="eyebrow">REGISTRO</span><h2>Crear usuario</h2><p class="intro">Completa los datos para acceder al copiloto.</p>
+        {% elif mode == 'recover' %}
+          <span class="eyebrow">RECUPERACIÓN SEGURA</span><h2>Recupera tu acceso</h2><p class="intro">Te enviaremos instrucciones si encontramos tu correo.</p>
+        {% else %}
+          <span class="eyebrow">ACCESO SEGURO</span><h2>Bienvenido de nuevo</h2><p class="intro">Ingresa tus credenciales para acceder al dashboard.</p>
+        {% endif %}
+
+        {% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}
+
+        <form method="post" novalidate>
+          {% if mode == 'register' %}
+            <label>Nombre completo<input name="name" minlength="3" autocomplete="name" placeholder="Ej. Andrea Ramírez" required></label>
+            <label>Correo corporativo<input type="email" name="email" autocomplete="email" placeholder="nombre@empresa.com" required></label>
+            <label>Nombre de usuario<input name="username" minlength="3" maxlength="50" pattern="[a-zA-Z0-9_.-]+" autocomplete="username" placeholder="Ej. aramirez" required></label>
+            <div class="password-grid"><label>Contraseña<span class="password-field"><input type="password" id="password" name="password" minlength="8" autocomplete="new-password" placeholder="Mínimo 8 caracteres" required><button type="button" class="toggle-password" aria-label="Mostrar contraseña">Ver</button></span></label><label>Confirmar contraseña<input type="password" name="confirmation" minlength="8" autocomplete="new-password" placeholder="Repite tu contraseña" required></label></div>
+          {% elif mode == 'login' %}
+            <label>Nombre de usuario<input name="username" autocomplete="username" placeholder="Ej. aramirez" required></label>
+            <label>Contraseña<span class="password-field"><input type="password" id="password" name="password" minlength="8" autocomplete="current-password" placeholder="Mínimo 8 caracteres" required><button type="button" class="toggle-password" aria-label="Mostrar contraseña">Ver</button></span></label>
+          {% else %}
+            <label>Correo corporativo<input type="email" name="email" autocomplete="email" placeholder="nombre@empresa.com" required></label>
+          {% endif %}
+          {% if mode == 'login' %}<div class="form-options"><label class="check"><input type="checkbox" name="remember"> Mantener sesión</label><a href="{{ url_for('recover') }}">¿Olvidaste tu contraseña?</a></div>{% endif %}
+          <button class="submit" type="submit">{% if mode == 'register' %}Crear cuenta{% elif mode == 'recover' %}Enviar instrucciones{% else %}Ingresar al dashboard{% endif %}<span>→</span></button>
+        </form>
+        <p class="switch">{% if mode == 'register' %}¿Ya tienes una cuenta? <a href="{{ url_for('login') }}">Inicia sesión</a>{% elif mode == 'recover' %}<a href="{{ url_for('login') }}">← Volver al inicio de sesión</a>{% else %}¿No tienes una cuenta? <a href="{{ url_for('register') }}">Crear usuario</a>{% endif %}</p>
+        <div class="security-note"><span>✓</span><p><strong>Acceso protegido</strong>Tu contraseña se almacena cifrada y nunca es visible para ZYMA.</p></div>
+      </div>
+    </section>
+  </main>
+  <script>document.querySelector('.toggle-password')?.addEventListener('click',function(){const input=document.getElementById('password');input.type=input.type==='password'?'text':'password';this.textContent=input.type==='password'?'Ver':'Ocultar'});</script>
+</body>
+</html>
