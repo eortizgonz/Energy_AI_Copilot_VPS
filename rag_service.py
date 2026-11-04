@@ -170,3 +170,32 @@ PREGUNTA: {question}"""
         "options": {"temperature": 0.1, "num_ctx": 4096, "num_predict": 420},
     })
     return response["message"]["content"], sources
+
+
+def answer_copilot(question, operational_context, operational_sources):
+    chunks = retrieve(question, limit=4)
+    evidence, sources = [], list(operational_sources)
+    for chunk in chunks:
+        label = f"{chunk['document_name']} · página {chunk['page']}"
+        evidence.append(f"[{label}]\n{chunk['content']}")
+        if label not in sources:
+            sources.append(label)
+    prompt = f"""Responde en español utilizando exclusivamente la información operacional y documental suministrada. Puedes analizar condición predictiva, telemetría, riesgo, paradas, turnos, eficiencia térmica, disponibilidad, rendimiento, conformidad y generación. Distingue datos medidos o simulados de recomendaciones documentales. No inventes cifras ni eventos. Si la información no es suficiente, indícalo. Prioriza operación segura, LOTO y validación con personal autorizado cuando recomiendes una intervención. Cita las fuentes entre corchetes. Máximo 280 palabras, texto plano.
+
+INFORMACIÓN OPERACIONAL ACTUAL:
+{operational_context}
+
+DOCUMENTOS RECUPERADOS:
+{chr(10).join(evidence) if evidence else 'No se recuperaron fragmentos documentales relevantes.'}
+
+PREGUNTA: {question}"""
+    response = _ollama("/api/chat", {
+        "model": os.environ.get("OLLAMA_CHAT_MODEL", "llama3.1:8b"),
+        "messages": [
+            {"role": "system", "content": "Eres el copiloto operacional Energy para generación térmica. Analiza fielmente datos PostgreSQL y documentos pgvector."},
+            {"role": "user", "content": prompt},
+        ],
+        "stream": False,
+        "options": {"temperature": 0.0, "num_ctx": 4096, "num_predict": 380},
+    })
+    return response["message"]["content"], sources

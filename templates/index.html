@@ -71,7 +71,6 @@
         <div class="rag-hero"><div><span class="eyebrow">CONOCIMIENTO TÉRMICO</span><h2>Documentos RAG de los 10 activos</h2><p>Consulta fallas probables, causas según variables dominantes, soluciones y acciones seguras por rango de riesgo.</p></div><button id="ragRefresh">Actualizar documentos</button></div>
         <div class="rag-layout">
           <article class="rag-library"><span class="eyebrow">BASE DOCUMENTAL</span><h2>Cargar documentación autorizada</h2><p>Formatos: PDF, Word, Excel, PowerPoint, TXT, Markdown, CSV, JSON, HTML y XML. Máximo 20 archivos y 25 MB por archivo.</p><form id="ragUploadForm"><label class="rag-file-picker"><input id="ragFiles" name="files" type="file" multiple accept=".pdf,.docx,.xlsx,.xls,.pptx,.txt,.md,.csv,.json,.html,.htm,.xml" required><span>Seleccionar documentos</span></label><button id="ragUploadButton" type="submit">Procesar e indexar</button></form><div id="ragUploadStatus" class="rag-upload-status"></div><div id="ragDocumentList" class="rag-document-list"><p>Consultando documentos…</p></div><small>La documentación debe estar autorizada y validarse con Ingeniería, Operaciones, Mantenimiento y HSE.</small></article>
-          <article class="rag-chat panel"><span class="eyebrow dark">COPILOTO DOCUMENTAL</span><h2>Consulta los documentos Energy</h2><p class="rag-chat-intro">Las respuestas se construyen con fragmentos recuperados desde la base vectorial pgvector.</p><form id="ragForm"><textarea id="ragQuestion" minlength="5" maxlength="2000" placeholder="Ej.: ¿Qué acciones se recomiendan para CAL-02 con temperatura metálica y CO elevados?" required></textarea><button type="submit" id="ragSubmit">Consultar RAG</button></form><div class="rag-answer" id="ragAnswer"><p>Formula una pregunta sobre operación, fallas, variables o mantenimiento de los activos.</p></div><div class="rag-sources" id="ragSources"></div></article>
         </div>
       </section>
 
@@ -82,6 +81,12 @@
     </div>
   </main>
 </div>
-<script src="{{ url_for('static', filename='app.js', v='20261104-5') }}"></script>
+<button type="button" class="ai-launcher" id="aiLauncher" aria-label="Abrir copiloto Energy">✦</button>
+<aside class="ai-chat" id="aiChat" aria-label="Copiloto Energy">
+  <header class="ai-head"><div><b>Energy AI Copilot</b><small>Analítica operacional integrada</small></div><button type="button" id="aiClose" aria-label="Cerrar">×</button></header>
+  <div class="ai-messages" id="aiMessages"><div class="ai-message assistant">Hola. Pregunta por riesgo predictivo, telemetría, eficiencia térmica, paradas, turnos o documentación técnica. Consultaré los datos actuales y la base vectorial.</div></div>
+  <form class="ai-compose" id="aiForm"><textarea id="aiQuestion" minlength="5" maxlength="2000" placeholder="Ej.: ¿Cuál activo tiene mayor riesgo y cómo afecta la eficiencia del turno?" required></textarea><button type="submit" id="aiSend">Consultar con IA</button></form>
+</aside>
+<script src="{{ url_for('static', filename='app.js', v='20261104-6') }}"></script>
 </body>
 </html>

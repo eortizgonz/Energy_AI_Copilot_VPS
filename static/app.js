@@ -463,7 +463,6 @@ document.getElementById("shiftCancel").addEventListener("click", () => { documen
 document.getElementById("shiftForm").addEventListener("submit", saveShift);
 document.getElementById("ragRefresh").addEventListener("click", () => loadRagDocuments().catch(error => alert(error.message)));
 document.getElementById("ragUploadForm").addEventListener("submit", uploadRagDocuments);
-document.getElementById("ragForm").addEventListener("submit", askRag);
 document.getElementById("downtimeApply").addEventListener("click", () => loadDowntime().catch(error => alert(error.message)));
 document.getElementById("downtimeRegister").addEventListener("click", () => {
   document.getElementById("downtimeStarted").value = localInputDate();
@@ -482,5 +481,47 @@ document.querySelectorAll(".nav-item").forEach(button => button.addEventListener
   const section = button.dataset.section;
   showView(section === "performance" ? "performance" : section === "shifts" ? "shifts" : section === "downtime" ? "downtime" : section === "rag" ? "rag" : "predictive", false);
 }));
+
+function addAiMessage(text, type, sources = [], mode = "") {
+  const box = document.getElementById("aiMessages");
+  const message = document.createElement("div");
+  message.className = `ai-message ${type}`;
+  message.textContent = text;
+  if (sources.length) {
+    const detail = document.createElement("small");
+    detail.textContent = `${mode ? `Modo: ${mode} · ` : ""}Fuentes: ${sources.join(" · ")}`;
+    message.appendChild(detail);
+  }
+  box.appendChild(message);
+  box.scrollTop = box.scrollHeight;
+}
+
+document.getElementById("aiLauncher").addEventListener("click", () => {
+  document.getElementById("aiChat").classList.toggle("open");
+  if (document.getElementById("aiChat").classList.contains("open")) document.getElementById("aiQuestion").focus();
+});
+document.getElementById("aiClose").addEventListener("click", () => document.getElementById("aiChat").classList.remove("open"));
+document.getElementById("aiForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  const input = document.getElementById("aiQuestion");
+  const button = document.getElementById("aiSend");
+  const question = input.value.trim();
+  if (question.length < 5) return;
+  addAiMessage(question, "user");
+  input.value = "";
+  button.disabled = true;
+  button.textContent = "Analizando datos…";
+  try {
+    const response = await fetch("/api/copilot/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({question})});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "No fue posible consultar el copiloto");
+    addAiMessage(result.answer, "assistant", result.sources || [], result.mode || "");
+  } catch (error) {
+    addAiMessage(error.message, "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = "Consultar con IA";
+  }
+});
 
 refresh(false);

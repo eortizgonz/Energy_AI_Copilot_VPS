@@ -15,7 +15,7 @@ from werkzeug.utils import secure_filename
 
 from mailer import send_password_reset
 from energy_machine_manuals import diagnostic_for
-from rag_service import ALLOWED_DOCUMENT_EXTENSIONS, answer_rag, delete_document, ingest_document, list_documents
+from rag_service import ALLOWED_DOCUMENT_EXTENSIONS, answer_copilot, answer_rag, delete_document, ingest_document, list_documents
 
 
 def load_local_env():
@@ -453,6 +453,59 @@ def downtime_dashboard_payload():
     }
 
 
+def copilot_operational_context(question):
+    predictive = dashboard_payload()
+    efficiency = energy_efficiency_payload()
+    shifts = shift_dashboard_payload()
+    downtime = downtime_dashboard_payload()
+    normalized = question.casefold()
+    selected_machines = [machine for machine in predictive["machines"] if machine["id"].casefold() in normalized or machine["name"].casefold() in normalized]
+    selected_machines = selected_machines or sorted(predictive["machines"], key=lambda machine: machine["risk"], reverse=True)[:5]
+    efficiency_by_machine = {machine["id"]: machine for machine in efficiency["machines"]}
+    lines = [
+        "[PostgreSQL · análisis predictivo] "
+        f"Lectura {predictive['updated_at']}; {len(predictive['machines'])} activos; "
+        f"saludables {predictive['summary']['healthy']}, alertas {predictive['summary']['warning']}, "
+        f"críticos {predictive['summary']['critical']}, riesgo promedio {predictive['summary']['average_risk']}%, "
+        f"generación estimada {predictive['summary']['generation']} MW.",
+        "[PostgreSQL · KPI de eficiencia] "
+        f"Lectura {efficiency['updated_at']}; índice operacional {efficiency['summary']['operational_efficiency']}%, "
+        f"disponibilidad {efficiency['summary']['availability']}%, rendimiento {efficiency['summary']['performance']}%, "
+        f"conformidad {efficiency['summary']['conformity']}%, eficiencia térmica {efficiency['summary']['thermal_efficiency']}%. "
+        f"Pérdidas estimadas 7 días: {efficiency['losses']['downtime_minutes_7d']} min de indisponibilidad, "
+        f"brecha de generación {efficiency['losses']['generation_gap_mwh_7d']} MWh y degradación {efficiency['losses']['degradation_loss_mwh_7d']} MWh.",
+    ]
+    for machine in selected_machines:
+        energy = efficiency_by_machine.get(machine["id"])
+        signals = "; ".join(f"{item['label']} {item['value']} {item['unit']}" for item in machine["signals"].values())
+        factors = "; ".join(f"{item['name']} {item['impact']} puntos" for item in machine["factors"][:3])
+        line = (f"[PostgreSQL · activo {machine['id']}] {machine['name']} ({machine['area']}): riesgo {machine['risk']}%, "
+                f"estado {machine['status']}, uso {machine['hours']} h, vida útil estimada {machine['rul_days']} días; "
+                f"señales: {signals}; factores dominantes: {factors}; diagnóstico: {machine['diagnosis']}")
+        if energy:
+            line += (f"; índice operacional {energy['operational_efficiency']}%, disponibilidad {energy['availability']}%, "
+                     f"rendimiento {energy['performance']}%, conformidad {energy['conformity']}%, eficiencia térmica {energy['thermal_efficiency']}%")
+        lines.append(line + ".")
+    active = shifts["active_shift"]
+    active_text = (f"Turno activo {active['code']} {active['name']} ({active['start_time']}–{active['end_time']}), "
+        f"energía {active['net_generation_mwh']} MWh, índice operacional {active['operational_efficiency']}%, "
+        f"eficiencia térmica {active['thermal_efficiency']}% y paradas {active['downtime_minutes']} min. " if active else "No hay turno activo. ")
+    lines.append("[PostgreSQL · turnos] " + active_text + "Comparativo: " + "; ".join(
+        f"{shift['code']} {shift['name']}: {shift['start_time']}–{shift['end_time']}, energía {shift['net_generation_mwh']} MWh, índice {shift['operational_efficiency']}%" for shift in shifts["shifts"]))
+    summary = downtime["summary"]
+    lines.append(f"[PostgreSQL · paradas] Periodo {downtime['filters']['date_from']} a {downtime['filters']['date_to']}: "
+                 f"{summary['events']} eventos, {summary['total_minutes']} min, promedio {summary['average_minutes']} min, "
+                 f"{summary['open_events']} abiertos, mayor impacto {summary['top_machine']}. Categorías: " +
+                 "; ".join(f"{row['category']} {row['events']} eventos/{row['minutes']} min" for row in downtime["by_category"][:8]))
+    for event in downtime["events"][:10]:
+        lines.append(f"[PostgreSQL · parada {event['id']}] {event['machine_code']}, {event['category']}, causa {event['cause']}, "
+                     f"{event['duration_minutes']} min, estado {event['status']}, turno {event['shift_code'] or 'sin turno'}, origen {event['source']}.")
+    return "\n".join(lines), [
+        "PostgreSQL · telemetría y análisis predictivo", "PostgreSQL · energy_generation_readings",
+        "PostgreSQL · energy_downtime_events", "PostgreSQL · work_shifts",
+    ]
+
+
 def parse_local_datetime(value):
     try:
         parsed = datetime.fromisoformat(value)
@@ -748,6 +801,26 @@ def api_rag_chat():
         return jsonify({"error": str(error)}), 400
     except RuntimeError as error:
         return jsonify({"error": str(error)}), 503
+
+
+@app.post("/api/copilot/chat")
+@login_required
+def api_copilot_chat():
+    body = request.get_json(silent=True) or {}
+    question = body.get("question", "").strip() if isinstance(body.get("question"), str) else ""
+    if len(question) < 5 or len(question) > 2000:
+        return jsonify({"error": "La pregunta debe tener entre 5 y 2000 caracteres."}), 400
+    try:
+        context, operational_sources = copilot_operational_context(question)
+        answer, sources = answer_copilot(question, context, operational_sources)
+        return jsonify({"answer": answer, "sources": sources, "mode": "operacional integrado"})
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except RuntimeError as error:
+        return jsonify({"error": str(error)}), 503
+    except Exception:
+        app.logger.exception("Error consultando el copiloto operacional")
+        return jsonify({"error": "No fue posible consultar el copiloto operacional."}), 503
 
 
 @app.get("/api/downtime")
