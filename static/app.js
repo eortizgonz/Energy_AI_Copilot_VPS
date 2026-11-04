@@ -2,6 +2,7 @@ const state = {data: null, energy: null, shifts: null, filter: "all", selectedId
 const labels = {healthy: "Saludable", warning: "Alerta", critical: "Crítica"};
 const nf = new Intl.NumberFormat("es-CO", {maximumFractionDigits: 1});
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+let downtimeOptionsLoaded = false;
 
 async function getDashboard() {
   const response = await fetch("/api/dashboard");
@@ -20,11 +21,143 @@ async function getShiftsDashboard() {
   return response.json();
 }
 
+async function getShifts() {
+  const response = await fetch("/api/shifts");
+  if (!response.ok) throw new Error("No fue posible consultar la configuración de turnos");
+  return response.json();
+}
+
+function showShiftMessage(message, error = false) {
+  const element = document.getElementById("shiftFormMessage");
+  element.hidden = !message;
+  element.textContent = message || "";
+  element.classList.toggle("error", error);
+}
+
+function resetShiftForm(shift = null) {
+  document.getElementById("shiftForm").hidden = false;
+  document.getElementById("shiftId").value = shift?.id || "";
+  document.getElementById("shiftCode").value = shift?.code || "";
+  document.getElementById("shiftName").value = shift?.name || "";
+  document.getElementById("shiftStart").value = shift?.start_time || "";
+  document.getElementById("shiftEnd").value = shift?.end_time || "";
+  document.getElementById("shiftEnabled").checked = shift?.active ?? true;
+  txt("shiftFormTitle", shift ? `Editar ${shift.code}` : "Crear turno");
+  showShiftMessage("");
+  document.getElementById("shiftCode").focus();
+}
+
+async function loadShiftManager() {
+  const shifts = await getShifts();
+  const list = document.getElementById("shiftManagerList");
+  list.innerHTML = shifts.length ? shifts.map(shift => `<article class="shift-manager-row ${shift.active ? "" : "inactive"}"><div><strong>${esc(shift.code)} · ${esc(shift.name)}</strong><span>${esc(shift.start_time)}–${esc(shift.end_time)} · ${nf.format(shift.planned_minutes)} min</span></div><span class="shift-manager-status">${shift.active ? "Activo" : "Inactivo"}</span><div class="shift-manager-actions"><button type="button" data-shift-edit="${shift.id}">Editar</button><button type="button" class="danger" data-shift-delete="${shift.id}">Eliminar</button></div></article>`).join("") : '<p class="shift-empty">No hay turnos configurados.</p>';
+  list.querySelectorAll("[data-shift-edit]").forEach(button => button.addEventListener("click", () => resetShiftForm(shifts.find(shift => shift.id === Number(button.dataset.shiftEdit)))));
+  list.querySelectorAll("[data-shift-delete]").forEach(button => button.addEventListener("click", () => deleteShift(Number(button.dataset.shiftDelete), shifts.find(shift => shift.id === Number(button.dataset.shiftDelete)))));
+}
+
+async function openShiftManager() {
+  const dialog = document.getElementById("shiftDialog");
+  document.getElementById("shiftForm").hidden = true;
+  showShiftMessage("");
+  dialog.showModal();
+  try { await loadShiftManager(); } catch (error) { showShiftMessage(error.message, true); }
+}
+
+async function saveShift(event) {
+  event.preventDefault();
+  const id = document.getElementById("shiftId").value;
+  const button = document.getElementById("shiftSave");
+  const payload = {
+    code: document.getElementById("shiftCode").value,
+    name: document.getElementById("shiftName").value,
+    start_time: document.getElementById("shiftStart").value,
+    end_time: document.getElementById("shiftEnd").value,
+    active: document.getElementById("shiftEnabled").checked,
+  };
+  button.disabled = true;
+  button.textContent = "Guardando…";
+  try {
+    const response = await fetch(id ? `/api/shifts/${id}` : "/api/shifts", {method: id ? "PUT" : "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "No fue posible guardar el turno");
+    document.getElementById("shiftForm").hidden = true;
+    await loadShiftManager();
+    await refreshShifts();
+    showShiftMessage(id ? "Turno actualizado correctamente." : "Turno creado correctamente.");
+  } catch (error) {
+    showShiftMessage(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Guardar turno";
+  }
+}
+
+async function deleteShift(id, shift) {
+  if (!confirm(`¿Deseas eliminar el turno ${shift.code}? Si tiene historial será desactivado.`)) return;
+  try {
+    const response = await fetch(`/api/shifts/${id}`, {method: "DELETE"});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "No fue posible eliminar el turno");
+    document.getElementById("shiftForm").hidden = true;
+    await loadShiftManager();
+    await refreshShifts();
+    showShiftMessage(data.message || "Turno eliminado correctamente.");
+  } catch (error) {
+    showShiftMessage(error.message, true);
+  }
+}
+
 async function loadRagDocuments() {
   const response = await fetch("/api/rag/documents");
-  if (!response.ok) throw new Error("No fue posible consultar los documentos RAG");
-  const documents = await response.json();
-  document.getElementById("ragDocumentList").innerHTML = documents.length ? documents.map(document => `<div class="rag-document"><strong>${esc(document.document_name)}</strong><span>${document.chunks} fragmentos</span><small>${new Date(document.indexed_at).toLocaleString("es-CO")}</small></div>`).join("") : '<p class="rag-empty">No hay manuales indexados. Ejecuta <code>python ingest_energy_manuals.py</code>.</p>';
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "No fue posible consultar los documentos RAG");
+  const documents = result;
+  const list = document.getElementById("ragDocumentList");
+  list.innerHTML = documents.length ? `<table class="rag-document-table"><thead><tr><th>Documento</th><th>Fragmentos</th><th>Indexación</th><th></th></tr></thead><tbody>${documents.map(document => `<tr><td><strong>${esc(document.document_name)}</strong></td><td>${document.chunks}</td><td>${new Date(document.indexed_at).toLocaleString("es-CO")}</td><td><button class="rag-delete" data-name="${esc(document.document_name)}">Eliminar</button></td></tr>`).join("")}</tbody></table>` : '<p class="rag-empty">No hay documentos indexados. Carga documentación o ejecuta <code>python ingest_energy_manuals.py</code>.</p>';
+  list.querySelectorAll(".rag-delete").forEach(button => button.addEventListener("click", () => removeRagDocument(button.dataset.name)));
+}
+
+async function uploadRagDocuments(event) {
+  event.preventDefault();
+  const input = document.getElementById("ragFiles");
+  const button = document.getElementById("ragUploadButton");
+  const status = document.getElementById("ragUploadStatus");
+  const files = [...input.files];
+  if (!files.length) return;
+  const body = new FormData();
+  files.forEach(file => body.append("files", file));
+  button.disabled = true;
+  status.classList.remove("error");
+  status.textContent = "Extrayendo, fragmentando, vectorizando e indexando…";
+  try {
+    const response = await fetch("/api/rag/documents", {method: "POST", body});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "No fue posible indexar los documentos");
+    status.textContent = `${result.total} documento(s) indexado(s) correctamente.`;
+    input.value = "";
+    await loadRagDocuments();
+  } catch (error) {
+    status.classList.add("error");
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function removeRagDocument(name) {
+  if (!confirm(`¿Eliminar ${name} de la base vectorial?`)) return;
+  const status = document.getElementById("ragUploadStatus");
+  try {
+    const response = await fetch(`/api/rag/documents/${encodeURIComponent(name)}`, {method: "DELETE"});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "No fue posible eliminar el documento");
+    status.classList.remove("error");
+    status.textContent = `${name} eliminado (${result.deleted_chunks} fragmentos).`;
+    await loadRagDocuments();
+  } catch (error) {
+    status.classList.add("error");
+    status.textContent = error.message;
+  }
 }
 
 async function askRag(event) {
@@ -47,6 +180,73 @@ async function askRag(event) {
     button.disabled = false;
     button.textContent = "Consultar RAG";
   }
+}
+
+function localDateTime(value) {
+  return value ? new Date(value).toLocaleString("es-CO", {dateStyle: "short", timeStyle: "short"}) : "Abierta";
+}
+
+function localInputDate(value = new Date()) {
+  return new Date(value.getTime() - value.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
+async function loadDowntime() {
+  const query = new URLSearchParams();
+  [["date_from", "downtimeFrom"], ["date_to", "downtimeTo"], ["machine", "downtimeMachine"], ["category", "downtimeCategory"], ["status", "downtimeStatus"]].forEach(([key, id]) => {
+    const value = document.getElementById(id).value;
+    if (value) query.set(key, value);
+  });
+  const response = await fetch(`/api/downtime?${query}`);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "No fue posible consultar las paradas");
+  if (!downtimeOptionsLoaded) {
+    const machines = data.options.machines.map(machine => `<option value="${esc(machine.code)}">${esc(machine.code)} · ${esc(machine.name)}</option>`).join("");
+    document.getElementById("downtimeMachine").insertAdjacentHTML("beforeend", machines);
+    document.getElementById("downtimeFormMachine").innerHTML = machines;
+    const categories = data.options.categories.map(category => `<option value="${esc(category)}">${esc(category)}</option>`).join("");
+    document.getElementById("downtimeCategory").insertAdjacentHTML("beforeend", categories);
+    document.getElementById("downtimeCategoryOptions").innerHTML = categories;
+    downtimeOptionsLoaded = true;
+  }
+  document.getElementById("downtimeFrom").value = data.filters.date_from;
+  document.getElementById("downtimeTo").value = data.filters.date_to;
+  txt("downtimeTotal", `${nf.format(data.summary.total_minutes)} min`);
+  txt("downtimeEvents", data.summary.events);
+  txt("downtimeAverage", `${nf.format(data.summary.average_minutes)} min`);
+  txt("downtimeOpen", data.summary.open_events);
+  txt("downtimeTopMachine", `Mayor impacto: ${data.summary.top_machine}`);
+  txt("downtimePeriod", `${data.filters.date_from} → ${data.filters.date_to}`);
+  document.getElementById("downtimeRows").innerHTML = data.events.length ? data.events.map(event => `<tr><td><strong>${localDateTime(event.started_at)}</strong><small>${localDateTime(event.ended_at)}</small></td><td><strong>${esc(event.machine_code)}</strong><small>${esc(event.machine_name)} · ${esc(event.area)}</small></td><td>${esc(event.shift_code || "—")}</td><td><strong>${esc(event.category)}</strong><small>${esc(event.cause)}</small></td><td>${nf.format(event.duration_minutes)} min</td><td>${event.planned ? "Planificada" : "No planificada"}<small>${esc(event.source)}</small></td><td><span class="downtime-status ${event.status}">${event.status === "open" ? "Abierta" : "Cerrada"}</span></td><td>${event.status === "open" ? `<button class="downtime-close" data-id="${event.id}">Cerrar</button>` : ""}</td></tr>`).join("") : '<tr><td colspan="8" class="empty-state">No hay paradas para los filtros seleccionados.</td></tr>';
+  const maxMinutes = Math.max(...data.by_category.map(item => item.minutes), 1);
+  document.getElementById("downtimeCategories").innerHTML = data.by_category.length ? data.by_category.map(item => `<div class="downtime-category"><label><strong>${esc(item.category)}</strong><span>${item.events} eventos · ${nf.format(item.minutes)} min</span></label><i><b style="width:${item.minutes / maxMinutes * 100}%"></b></i></div>`).join("") : "<p>Sin pérdidas en el periodo.</p>";
+  document.querySelectorAll(".downtime-close").forEach(button => button.addEventListener("click", () => closeDowntime(button.dataset.id)));
+}
+
+async function closeDowntime(id) {
+  if (!confirm("¿Cerrar esta parada con la fecha y hora actual?")) return;
+  const response = await fetch(`/api/downtime/${id}/close`, {method: "PATCH"});
+  const data = await response.json();
+  if (!response.ok) return alert(data.error || "No fue posible cerrar la parada");
+  await loadDowntime();
+}
+
+async function saveDowntime(event) {
+  event.preventDefault();
+  const payload = {
+    machine: document.getElementById("downtimeFormMachine").value,
+    category: document.getElementById("downtimeFormCategory").value,
+    started_at: document.getElementById("downtimeStarted").value,
+    ended_at: document.getElementById("downtimeEnded").value,
+    cause: document.getElementById("downtimeCause").value,
+    notes: document.getElementById("downtimeNotes").value,
+    planned: document.getElementById("downtimePlanned").checked,
+  };
+  const response = await fetch("/api/downtime", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
+  const data = await response.json();
+  if (!response.ok) return alert(data.error || "No fue posible guardar la parada");
+  document.getElementById("downtimeDialog").close();
+  document.getElementById("downtimeForm").reset();
+  await loadDowntime();
 }
 
 function txt(id, value) { document.getElementById(id).textContent = value; }
@@ -181,13 +381,15 @@ function showView(view, scrollToAssets = false) {
   const thermal = view === "performance";
   const shifts = view === "shifts";
   const rag = view === "rag";
-  const dashboard = !thermal && !shifts && !rag;
+  const downtime = view === "downtime";
+  const dashboard = !thermal && !shifts && !rag && !downtime;
   document.querySelectorAll(".dashboard-view").forEach(section => section.hidden = !dashboard);
   document.getElementById("performanceView").hidden = !thermal;
   document.getElementById("shiftView").hidden = !shifts;
   document.getElementById("ragView").hidden = !rag;
-  txt("headerPath", thermal ? "OPERACIÓN / EFICIENCIA TÉRMICA" : shifts ? "OPERACIÓN / TURNO" : rag ? "CONOCIMIENTO / DOCUMENTOS RAG" : "OPERACIÓN / ANALÍTICA PREDICTIVA");
-  txt("headerTitle", thermal ? "Desempeño de generación térmica" : shifts ? "Seguimiento del turno energético" : rag ? "Copiloto documental Energy" : "Salud de generación térmica");
+  document.getElementById("downtimeView").hidden = !downtime;
+  txt("headerPath", thermal ? "OPERACIÓN / EFICIENCIA TÉRMICA" : shifts ? "OPERACIÓN / TURNO" : downtime ? "OPERACIÓN / PARADAS" : rag ? "CONOCIMIENTO / DOCUMENTOS RAG" : "OPERACIÓN / ANALÍTICA PREDICTIVA");
+  txt("headerTitle", thermal ? "Desempeño de generación térmica" : shifts ? "Seguimiento del turno energético" : downtime ? "Pérdidas por paradas" : rag ? "Copiloto documental Energy" : "Salud de generación térmica");
   if (thermal) {
     renderThermal();
     window.scrollTo({top: 0, behavior: "smooth"});
@@ -196,6 +398,9 @@ function showView(view, scrollToAssets = false) {
     window.scrollTo({top: 0, behavior: "smooth"});
   } else if (rag) {
     loadRagDocuments().catch(error => document.getElementById("ragDocumentList").innerHTML = `<p class="machine-error">${esc(error.message)}</p>`);
+    window.scrollTo({top: 0, behavior: "smooth"});
+  } else if (downtime) {
+    loadDowntime().catch(error => alert(error.message));
     window.scrollTo({top: 0, behavior: "smooth"});
   } else if (scrollToAssets) {
     document.getElementById("assets").scrollIntoView({behavior: "smooth", block: "start"});
@@ -239,7 +444,7 @@ async function refreshShifts() {
   state.shifts = await getShiftsDashboard();
   renderShifts();
   button.disabled = false;
-  button.textContent = "Actualizar turno";
+  button.textContent = "Actualizar indicadores";
 }
 
 document.querySelectorAll("[data-filter]").forEach(button => button.addEventListener("click", () => {
@@ -250,8 +455,22 @@ document.querySelectorAll("[data-filter]").forEach(button => button.addEventList
 document.getElementById("refreshButton").addEventListener("click", () => refresh(true));
 document.getElementById("thermalRefresh").addEventListener("click", refreshThermal);
 document.getElementById("shiftRefresh").addEventListener("click", refreshShifts);
+document.getElementById("shiftManage").addEventListener("click", openShiftManager);
+document.getElementById("shiftDialogClose").addEventListener("click", () => document.getElementById("shiftDialog").close());
+document.getElementById("shiftDialog").addEventListener("click", event => { if (event.target === event.currentTarget) event.currentTarget.close(); });
+document.getElementById("shiftNew").addEventListener("click", () => resetShiftForm());
+document.getElementById("shiftCancel").addEventListener("click", () => { document.getElementById("shiftForm").hidden = true; showShiftMessage(""); });
+document.getElementById("shiftForm").addEventListener("submit", saveShift);
 document.getElementById("ragRefresh").addEventListener("click", () => loadRagDocuments().catch(error => alert(error.message)));
+document.getElementById("ragUploadForm").addEventListener("submit", uploadRagDocuments);
 document.getElementById("ragForm").addEventListener("submit", askRag);
+document.getElementById("downtimeApply").addEventListener("click", () => loadDowntime().catch(error => alert(error.message)));
+document.getElementById("downtimeRegister").addEventListener("click", () => {
+  document.getElementById("downtimeStarted").value = localInputDate();
+  document.getElementById("downtimeDialog").showModal();
+});
+document.getElementById("downtimeDialogClose").addEventListener("click", () => document.getElementById("downtimeDialog").close());
+document.getElementById("downtimeForm").addEventListener("submit", saveDowntime);
 document.getElementById("machineDialogClose").addEventListener("click", () => document.getElementById("machineDialog").close());
 document.getElementById("machineDialog").addEventListener("click", event => {
   if (event.target === event.currentTarget) event.currentTarget.close();
@@ -261,7 +480,7 @@ document.querySelectorAll(".nav-item").forEach(button => button.addEventListener
   document.querySelectorAll(".nav-item").forEach(item => item.classList.toggle("active", item === button));
   document.querySelector(".sidebar").classList.remove("open");
   const section = button.dataset.section;
-  showView(section === "performance" ? "performance" : section === "shifts" ? "shifts" : section === "rag" ? "rag" : "predictive", section === "assets");
+  showView(section === "performance" ? "performance" : section === "shifts" ? "shifts" : section === "downtime" ? "downtime" : section === "rag" ? "rag" : "predictive", false);
 }));
 
 refresh(false);

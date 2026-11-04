@@ -3,9 +3,19 @@ import json
 import os
 import urllib.error
 import urllib.request
+from io import BytesIO
+from pathlib import Path
 
 import psycopg
+from docx import Document
+from openpyxl import load_workbook
 from psycopg.rows import dict_row
+from pypdf import PdfReader
+from pptx import Presentation
+import xlrd
+
+
+ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".xls", ".pptx", ".txt", ".md", ".csv", ".json", ".html", ".htm", ".xml"}
 
 
 def load_local_env():
@@ -53,23 +63,56 @@ def _vector(values):
     return "[" + ",".join(f"{float(value):.9g}" for value in values) + "]"
 
 
-def ingest_text(document_name, text):
-    chunks = _chunks(text)
-    if not chunks:
+def ingest_pages(document_name, pages, raw=None):
+    records = [(page, index, chunk) for page, text in pages for index, chunk in enumerate(_chunks(text))]
+    if not records:
         raise ValueError("El documento no contiene texto indexable.")
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    source = raw if raw is not None else "\n".join(text for _, text in pages).encode("utf-8")
+    digest = hashlib.sha256(source).hexdigest()
     embeddings = _ollama("/api/embed", {
-        "model": os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text"), "input": chunks,
+        "model": os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
+        "input": [record[2] for record in records],
     })["embeddings"]
+    if len(embeddings) != len(records):
+        raise RuntimeError("Ollama no devolvió una representación vectorial para cada fragmento.")
     with connect() as db:
         db.execute("DELETE FROM public.sop_chunks WHERE document_name=%s", (document_name,))
-        for index, (content, embedding) in enumerate(zip(chunks, embeddings)):
+        for (page, index, content), embedding in zip(records, embeddings):
             db.execute(
                 """INSERT INTO public.sop_chunks(document_hash,document_name,page,chunk_index,content,embedding)
-                VALUES(%s,%s,1,%s,%s,%s::vector)""",
-                (digest, document_name, index, content, _vector(embedding)),
+                VALUES(%s,%s,%s,%s,%s,%s::vector)""",
+                (digest, document_name, page, index, content, _vector(embedding)),
             )
-    return len(chunks)
+    return len(records)
+
+
+def ingest_text(document_name, text):
+    return ingest_pages(document_name, [(1, text)], text.encode("utf-8"))
+
+
+def extract_document(filename, raw):
+    extension = Path(filename).suffix.lower()
+    if extension not in ALLOWED_DOCUMENT_EXTENSIONS:
+        raise ValueError(f"Tipo de archivo no compatible: {extension or 'sin extensión'}")
+    stream = BytesIO(raw)
+    if extension == ".pdf":
+        return [(index + 1, page.extract_text() or "") for index, page in enumerate(PdfReader(stream).pages)]
+    if extension == ".docx":
+        return [(1, "\n".join(paragraph.text for paragraph in Document(stream).paragraphs))]
+    if extension == ".xlsx":
+        workbook = load_workbook(stream, read_only=True, data_only=True)
+        return [(index + 1, f"Hoja: {sheet.title}\n" + "\n".join(" | ".join(str(value) for value in row if value is not None) for row in sheet.iter_rows(values_only=True))) for index, sheet in enumerate(workbook.worksheets)]
+    if extension == ".xls":
+        workbook = xlrd.open_workbook(file_contents=raw)
+        return [(index + 1, f"Hoja: {sheet.name}\n" + "\n".join(" | ".join(str(sheet.cell_value(row, column)) for column in range(sheet.ncols)) for row in range(sheet.nrows))) for index, sheet in enumerate(workbook.sheets())]
+    if extension == ".pptx":
+        presentation = Presentation(stream)
+        return [(index + 1, "\n".join(shape.text for shape in slide.shapes if hasattr(shape, "text"))) for index, slide in enumerate(presentation.slides)]
+    return [(1, raw.decode("utf-8", errors="replace"))]
+
+
+def ingest_document(filename, raw):
+    return ingest_pages(filename, extract_document(filename, raw), raw)
 
 
 def list_documents():
@@ -78,6 +121,14 @@ def list_documents():
             """SELECT document_name,COUNT(*) chunks,MIN(created_at) indexed_at
             FROM public.sop_chunks GROUP BY document_name ORDER BY document_name"""
         ).fetchall()
+
+
+def delete_document(document_name):
+    with connect() as db:
+        rows = db.execute(
+            "DELETE FROM public.sop_chunks WHERE document_name=%s RETURNING id", (document_name,)
+        ).fetchall()
+    return len(rows)
 
 
 def retrieve(question, limit=5):

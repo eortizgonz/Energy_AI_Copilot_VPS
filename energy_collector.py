@@ -26,6 +26,14 @@ AUXILIARY_SHARE = {
     "fan": 0.070,
     "condenser": 0.045,
 }
+DOWNTIME_CAUSES = {
+    "boiler": ("Proceso térmico", "Desviación de combustión, temperatura o presión de vapor"),
+    "turbine": ("Condición mecánica", "Vibración, lubricación o expansión diferencial anormal"),
+    "generator": ("Sistema eléctrico", "Temperatura, desbalance de fases o excitación anormal"),
+    "pump": ("Sistema hidráulico", "Cavitación, fuga de sello o presión fuera de rango"),
+    "fan": ("Gases de combustión", "Desbalance del rodete o desviación del tiro"),
+    "condenser": ("Ciclo térmico", "Pérdida de vacío, ingreso de aire o bajo flujo de enfriamiento"),
+}
 
 
 def active_shift(shifts, timestamp):
@@ -37,6 +45,37 @@ def active_shift(shifts, timestamp):
         if start > end and (local_time >= start or local_time < end):
             return shift
     return None
+
+
+def update_simulated_downtime(db, machines, shift, timestamp, rng):
+    open_events = db.execute(
+        """SELECT id,machine_id,started_at FROM public.energy_downtime_events
+        WHERE status='open' AND source='simulator'"""
+    ).fetchall()
+    open_by_machine = {event["machine_id"]: event for event in open_events}
+    for event in open_events:
+        elapsed = (timestamp - event["started_at"]).total_seconds() / 60
+        if elapsed >= 10 and rng.random() < 0.05:
+            db.execute(
+                """UPDATE public.energy_downtime_events SET ended_at=%s,duration_minutes=%s,status='closed'
+                WHERE id=%s""",
+                (timestamp, elapsed, event["id"]),
+            )
+            open_by_machine.pop(event["machine_id"], None)
+    for machine in machines:
+        if machine["id"] in open_by_machine:
+            continue
+        probability = 0.0002 + float(machine["risk_score"]) * 0.000005
+        if rng.random() >= probability:
+            continue
+        category, cause = DOWNTIME_CAUSES.get(machine["machine_type"], ("Operación", "Condición operacional fuera de rango"))
+        db.execute(
+            """INSERT INTO public.energy_downtime_events
+            (event_key,machine_id,shift_id,started_at,duration_minutes,category,cause,planned,status,source,notes)
+            VALUES(%s,%s,%s,%s,0,%s,%s,FALSE,'open','simulator',%s)
+            ON CONFLICT(event_key) DO NOTHING""",
+            (f"SIM-{machine['code']}-{timestamp.strftime('%Y%m%d%H%M%S')}", machine["id"], shift["id"], timestamp, category, cause, f"Evento estimado por reglas; riesgo previo {float(machine['risk_score']):.1f}%."),
+        )
 
 
 def collect_once(interval_seconds):
@@ -91,6 +130,7 @@ def collect_once(interval_seconds):
                      heat_rate, thermal_efficiency, availability, performance, conformity, operational, shift["id"]),
                 ).fetchone()
                 inserted += int(result is not None)
+            update_simulated_downtime(db, machines, shift, timestamp, rng)
             db.execute(
                 """UPDATE public.energy_collection_runs SET finished_at=CURRENT_TIMESTAMP,status='completed',
                 readings_inserted=%s,machines_processed=%s WHERE id=%s""",

@@ -4,16 +4,18 @@ import hashlib
 import os
 import re
 import secrets
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
 import psycopg
 from psycopg.rows import dict_row
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 
 from mailer import send_password_reset
 from energy_machine_manuals import diagnostic_for
-from rag_service import answer_rag, list_documents
+from rag_service import ALLOWED_DOCUMENT_EXTENSIONS, answer_rag, delete_document, ingest_document, list_documents
 
 
 def load_local_env():
@@ -35,6 +37,7 @@ app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-change-this-secret"
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() in {"1", "true", "yes"}
+app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
 
 
 def get_db():
@@ -260,6 +263,52 @@ def shift_dashboard_payload():
     }
 
 
+def shift_minutes(value):
+    return value.hour * 60 + value.minute
+
+
+def shift_duration(start, end):
+    duration = (shift_minutes(end) - shift_minutes(start)) % 1440
+    return duration or 1440
+
+
+def shift_segments(start, end):
+    start_minute, duration = shift_minutes(start), shift_duration(start, end)
+    if duration == 1440:
+        return [(0, 1440)]
+    finish = start_minute + duration
+    return [(start_minute, finish)] if finish <= 1440 else [(start_minute, 1440), (0, finish - 1440)]
+
+
+def parse_shift_body(body):
+    code = str(body.get("code", "")).strip().upper()
+    name = str(body.get("name", "")).strip()
+    if not re.fullmatch(r"[A-Z0-9_-]{1,20}", code):
+        raise ValueError("El código debe tener entre 1 y 20 caracteres: letras, números, guion o guion bajo.")
+    if not name or len(name) > 60:
+        raise ValueError("El nombre es obligatorio y admite máximo 60 caracteres.")
+    try:
+        start = datetime.strptime(str(body.get("start_time", "")), "%H:%M").time()
+        end = datetime.strptime(str(body.get("end_time", "")), "%H:%M").time()
+    except ValueError as error:
+        raise ValueError("Los horarios deben tener el formato HH:MM.") from error
+    return code, name, start, end, bool(body.get("active", True)), shift_duration(start, end)
+
+
+def validate_shift_overlap(db, start, end, exclude_id=None):
+    if exclude_id is None:
+        rows = db.execute("SELECT id,code,start_time,end_time FROM public.work_shifts WHERE active").fetchall()
+    else:
+        rows = db.execute(
+            "SELECT id,code,start_time,end_time FROM public.work_shifts WHERE active AND id<>%s",
+            (exclude_id,),
+        ).fetchall()
+    candidate = shift_segments(start, end)
+    for row in rows:
+        if any(max(a, c) < min(b, d) for a, b in candidate for c, d in shift_segments(row["start_time"], row["end_time"])):
+            raise ValueError(f"El horario se solapa con el turno {row['code']}.")
+
+
 def machine_detail_payload(machine_code):
     with get_db() as db:
         machine = db.execute(
@@ -342,6 +391,76 @@ def machine_detail_payload(machine_code):
             "shift": f"{energy['shift_code']} · {energy['shift_name']}" if energy["shift_code"] else "Sin turno",
         } if energy else None),
     }
+
+
+def downtime_dashboard_payload():
+    local_today = datetime.now(ZoneInfo(os.environ.get("APP_TIMEZONE", "America/Bogota"))).date()
+    date_from = request.args.get("date_from") or (local_today - timedelta(days=30)).isoformat()
+    date_to = request.args.get("date_to") or local_today.isoformat()
+    try:
+        start_date = datetime.strptime(date_from, "%Y-%m-%d").date()
+        end_date = datetime.strptime(date_to, "%Y-%m-%d").date()
+    except ValueError as error:
+        raise ValueError("Las fechas deben usar el formato AAAA-MM-DD.") from error
+    if end_date < start_date or (end_date - start_date).days > 366:
+        raise ValueError("El rango de fechas no es válido o supera 366 días.")
+    conditions = ["e.started_at >= %s::date", "e.started_at < (%s::date + INTERVAL '1 day')"]
+    parameters = [date_from, date_to]
+    for argument, column in (("machine", "m.code"), ("category", "e.category"), ("status", "e.status")):
+        value = request.args.get(argument, "").strip()
+        if value:
+            conditions.append(f"{column}=%s")
+            parameters.append(value)
+    where = " AND ".join(conditions)
+    with get_db() as db:
+        events = db.execute(
+            f"""SELECT e.id,e.started_at,e.ended_at,
+                CASE WHEN e.status='open' THEN EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP-e.started_at))/60 ELSE e.duration_minutes END duration_minutes,
+                e.category,e.cause,e.planned,e.status,e.source,e.notes,
+                m.code machine_code,m.name machine_name,m.area,s.code shift_code,s.name shift_name
+            FROM public.energy_downtime_events e
+            JOIN public.machines m ON m.id=e.machine_id
+            LEFT JOIN public.work_shifts s ON s.id=e.shift_id
+            WHERE {where} ORDER BY e.started_at DESC""",
+            parameters,
+        ).fetchall()
+        machines = db.execute("SELECT code,name FROM public.machines WHERE active ORDER BY code").fetchall()
+        categories = db.execute("SELECT DISTINCT category FROM public.energy_downtime_events ORDER BY category").fetchall()
+    result = [{
+        **{key: row[key] for key in ("id", "category", "cause", "planned", "status", "source", "notes", "machine_code", "machine_name", "area", "shift_code", "shift_name")},
+        "started_at": row["started_at"].isoformat(timespec="seconds"),
+        "ended_at": row["ended_at"].isoformat(timespec="seconds") if row["ended_at"] else None,
+        "duration_minutes": round(float(row["duration_minutes"]), 1),
+    } for row in events]
+    total = round(sum(item["duration_minutes"] for item in result), 1)
+    by_category = {}
+    for item in result:
+        current = by_category.setdefault(item["category"], {"category": item["category"], "events": 0, "minutes": 0.0})
+        current["events"] += 1
+        current["minutes"] += item["duration_minutes"]
+    categories_result = sorted(by_category.values(), key=lambda item: item["minutes"], reverse=True)
+    for item in categories_result:
+        item["minutes"] = round(item["minutes"], 1)
+    machine_totals = {}
+    for item in result:
+        machine_totals[item["machine_code"]] = machine_totals.get(item["machine_code"], 0) + item["duration_minutes"]
+    top_machine = max(machine_totals, key=machine_totals.get) if machine_totals else "—"
+    return {
+        "filters": {"date_from": date_from, "date_to": date_to},
+        "summary": {"total_minutes": total, "events": len(result), "average_minutes": round(total / len(result), 1) if result else 0, "open_events": sum(item["status"] == "open" for item in result), "top_machine": top_machine},
+        "events": result, "by_category": categories_result,
+        "options": {"machines": machines, "categories": [row["category"] for row in categories]},
+    }
+
+
+def parse_local_datetime(value):
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Fecha y hora inválida.") from error
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ZoneInfo(os.environ.get("APP_TIMEZONE", "America/Bogota")))
+    return parsed.astimezone(timezone.utc)
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -489,10 +608,130 @@ def api_shifts_dashboard():
     return jsonify(shift_dashboard_payload())
 
 
+@app.get("/api/shifts")
+@login_required
+def api_shifts():
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT id,code,name,start_time,end_time,planned_minutes,active FROM public.work_shifts ORDER BY start_time,code"
+        ).fetchall()
+    return jsonify([{
+        **{key: row[key] for key in ("id", "code", "name", "planned_minutes", "active")},
+        "start_time": row["start_time"].strftime("%H:%M"),
+        "end_time": row["end_time"].strftime("%H:%M"),
+    } for row in rows])
+
+
+@app.post("/api/shifts")
+@login_required
+def api_shift_create():
+    try:
+        code, name, start, end, active, planned = parse_shift_body(request.get_json(silent=True) or {})
+        with get_db() as db:
+            if db.execute("SELECT 1 FROM public.work_shifts WHERE code=%s", (code,)).fetchone():
+                return jsonify({"error": "Ya existe un turno con ese código."}), 409
+            if active:
+                validate_shift_overlap(db, start, end)
+            row = db.execute(
+                "INSERT INTO public.work_shifts(code,name,start_time,end_time,planned_minutes,active) VALUES(%s,%s,%s,%s,%s,%s) RETURNING id",
+                (code, name, start, end, planned, active),
+            ).fetchone()
+        return jsonify({"id": row["id"], "created": True}), 201
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+
+
+@app.put("/api/shifts/<int:shift_id>")
+@login_required
+def api_shift_update(shift_id):
+    try:
+        code, name, start, end, active, planned = parse_shift_body(request.get_json(silent=True) or {})
+        with get_db() as db:
+            if db.execute("SELECT 1 FROM public.work_shifts WHERE code=%s AND id<>%s", (code, shift_id)).fetchone():
+                return jsonify({"error": "Ya existe un turno con ese código."}), 409
+            if active:
+                validate_shift_overlap(db, start, end, shift_id)
+            row = db.execute(
+                "UPDATE public.work_shifts SET code=%s,name=%s,start_time=%s,end_time=%s,planned_minutes=%s,active=%s WHERE id=%s RETURNING id",
+                (code, name, start, end, planned, active, shift_id),
+            ).fetchone()
+        if not row:
+            return jsonify({"error": "Turno no encontrado."}), 404
+        return jsonify({"id": row["id"], "updated": True})
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+
+
+@app.delete("/api/shifts/<int:shift_id>")
+@login_required
+def api_shift_delete(shift_id):
+    with get_db() as db:
+        if not db.execute("SELECT 1 FROM public.work_shifts WHERE id=%s", (shift_id,)).fetchone():
+            return jsonify({"error": "Turno no encontrado."}), 404
+        references = db.execute(
+            """SELECT
+                (SELECT COUNT(*) FROM public.energy_generation_readings WHERE shift_id=%s) +
+                (SELECT COUNT(*) FROM public.energy_downtime_events WHERE shift_id=%s) +
+                (SELECT COUNT(*) FROM public.production_runs WHERE shift_id=%s) AS total""",
+            (shift_id, shift_id, shift_id),
+        ).fetchone()["total"]
+        if references:
+            db.execute("UPDATE public.work_shifts SET active=FALSE WHERE id=%s", (shift_id,))
+            return jsonify({"deleted": False, "deactivated": True, "message": "El turno tiene historial y fue desactivado para conservar la trazabilidad."})
+        db.execute("DELETE FROM public.work_shifts WHERE id=%s", (shift_id,))
+    return jsonify({"deleted": True, "deactivated": False})
+
+
 @app.get("/api/rag/documents")
 @login_required
 def api_rag_documents():
-    return jsonify(list_documents())
+    try:
+        return jsonify(list_documents())
+    except Exception:
+        app.logger.exception("Error listando documentos RAG")
+        return jsonify({"error": "No fue posible consultar los documentos indexados."}), 503
+
+
+@app.post("/api/rag/documents")
+@login_required
+def api_rag_documents_upload():
+    files = [item for item in request.files.getlist("files") if item and item.filename]
+    if not files or len(files) > 20:
+        return jsonify({"error": "Selecciona entre 1 y 20 documentos."}), 400
+    results = []
+    try:
+        for uploaded in files:
+            filename = secure_filename(uploaded.filename)
+            if not filename or Path(filename).suffix.lower() not in ALLOWED_DOCUMENT_EXTENSIONS:
+                raise ValueError(f"Archivo no compatible: {uploaded.filename}")
+            raw = uploaded.read()
+            if not raw or len(raw) > 25 * 1024 * 1024:
+                raise ValueError(f"El archivo {filename} está vacío o supera 25 MB.")
+            results.append({"document_name": filename, "chunks": ingest_document(filename, raw)})
+        return jsonify({"documents": results, "total": len(results)}), 201
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except RuntimeError as error:
+        return jsonify({"error": str(error)}), 503
+    except Exception:
+        app.logger.exception("Error indexando documentos RAG")
+        return jsonify({"error": "No fue posible procesar los documentos."}), 500
+
+
+@app.delete("/api/rag/documents/<path:document_name>")
+@login_required
+def api_rag_document_delete(document_name):
+    filename = secure_filename(document_name)
+    if not filename or filename != document_name:
+        return jsonify({"error": "Nombre de documento inválido."}), 400
+    try:
+        deleted = delete_document(filename)
+        if not deleted:
+            return jsonify({"error": "Documento no encontrado."}), 404
+        return jsonify({"deleted_chunks": deleted})
+    except Exception:
+        app.logger.exception("Error eliminando documento RAG")
+        return jsonify({"error": "No fue posible eliminar el documento."}), 503
 
 
 @app.post("/api/rag/chat")
@@ -509,6 +748,65 @@ def api_rag_chat():
         return jsonify({"error": str(error)}), 400
     except RuntimeError as error:
         return jsonify({"error": str(error)}), 503
+
+
+@app.get("/api/downtime")
+@login_required
+def api_downtime():
+    try:
+        return jsonify(downtime_dashboard_payload())
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+
+
+@app.post("/api/downtime")
+@login_required
+def api_downtime_create():
+    body = request.get_json(silent=True) or {}
+    machine_code = str(body.get("machine", "")).strip().upper()
+    category = str(body.get("category", "")).strip()
+    cause = str(body.get("cause", "")).strip()
+    notes = str(body.get("notes", "")).strip()
+    if not machine_code or not category or not cause or len(category) > 60 or len(cause) > 180 or len(notes) > 500:
+        return jsonify({"error": "Máquina, categoría y causa son obligatorias y deben respetar las longitudes permitidas."}), 400
+    try:
+        started_at = parse_local_datetime(body.get("started_at"))
+        ended_at = parse_local_datetime(body["ended_at"]) if body.get("ended_at") else None
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    if ended_at and ended_at <= started_at:
+        return jsonify({"error": "La fecha de fin debe ser posterior al inicio."}), 400
+    local_started = started_at.astimezone(ZoneInfo(os.environ.get("APP_TIMEZONE", "America/Bogota")))
+    local_time = local_started.time().replace(tzinfo=None)
+    with get_db() as db:
+        machine = db.execute("SELECT id FROM public.machines WHERE code=%s AND active", (machine_code,)).fetchone()
+        if not machine:
+            return jsonify({"error": "Máquina no encontrada."}), 404
+        shifts = db.execute("SELECT id,start_time,end_time FROM public.work_shifts WHERE active ORDER BY start_time").fetchall()
+        shift = next((item for item in shifts if (item["start_time"] < item["end_time"] and item["start_time"] <= local_time < item["end_time"]) or (item["start_time"] > item["end_time"] and (local_time >= item["start_time"] or local_time < item["end_time"]))), None)
+        duration = (ended_at - started_at).total_seconds() / 60 if ended_at else 0
+        event = db.execute(
+            """INSERT INTO public.energy_downtime_events
+            (machine_id,shift_id,started_at,ended_at,duration_minutes,category,cause,planned,status,source,notes)
+            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,'manual',%s) RETURNING id""",
+            (machine["id"], shift["id"] if shift else None, started_at, ended_at, duration, category, cause, bool(body.get("planned")), "closed" if ended_at else "open", notes or None),
+        ).fetchone()
+    return jsonify({"id": event["id"], "created": True}), 201
+
+
+@app.patch("/api/downtime/<int:event_id>/close")
+@login_required
+def api_downtime_close(event_id):
+    with get_db() as db:
+        event = db.execute(
+            """UPDATE public.energy_downtime_events SET ended_at=CURRENT_TIMESTAMP,
+            duration_minutes=EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP-started_at))/60,status='closed'
+            WHERE id=%s AND status='open' RETURNING id,duration_minutes""",
+            (event_id,),
+        ).fetchone()
+    if not event:
+        return jsonify({"error": "La parada no existe o ya está cerrada."}), 404
+    return jsonify({"id": event["id"], "duration_minutes": round(float(event["duration_minutes"]), 1)})
 
 
 @app.get("/api/machines/<machine_id>")
