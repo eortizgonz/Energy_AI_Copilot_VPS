@@ -156,6 +156,56 @@ def dashboard_payload():
     }
 
 
+def energy_efficiency_payload():
+    with get_db() as db:
+        rows = db.execute(
+            """SELECT DISTINCT ON (r.machine_id)
+                m.code,m.name,m.area,m.machine_type,r.recorded_at,r.rated_power_mw,
+                r.availability,r.performance,r.conformity,r.operational_efficiency,
+                r.thermal_efficiency,r.heat_rate_mj_kwh,r.net_generation_mwh
+            FROM public.energy_generation_readings r
+            JOIN public.machines m ON m.id=r.machine_id
+            WHERE m.active
+            ORDER BY r.machine_id,r.recorded_at DESC"""
+        ).fetchall()
+    if not rows:
+        raise RuntimeError("No hay lecturas energéticas disponibles. Ejecuta energy_collector.py --once.")
+    machines = [{
+        "id": row["code"], "name": row["name"], "area": row["area"], "type": row["machine_type"],
+        "rated_power_mw": round(row["rated_power_mw"], 2),
+        "availability": round(row["availability"], 2),
+        "performance": round(row["performance"], 2),
+        "conformity": round(row["conformity"], 2),
+        "operational_efficiency": round(row["operational_efficiency"], 2),
+        "thermal_efficiency": round(row["thermal_efficiency"], 2),
+        "heat_rate_mj_kwh": round(row["heat_rate_mj_kwh"], 3),
+        "net_generation_mwh": round(row["net_generation_mwh"], 4),
+    } for row in rows]
+    count = len(rows)
+    avg = lambda field: round(sum(float(row[field]) for row in rows) / count, 2)
+    availability = avg("availability")
+    performance = avg("performance")
+    conformity = avg("conformity")
+    losses = {
+        "downtime_minutes_7d": round(sum((100 - float(row["availability"])) / 100 * 7 * 24 * 60 for row in rows)),
+        "generation_gap_mwh_7d": round(sum(float(row["rated_power_mw"]) * (100 - float(row["performance"])) / 100 * 7 * 24 for row in rows), 1),
+        "degradation_loss_mwh_7d": round(sum(float(row["rated_power_mw"]) * (100 - float(row["conformity"])) / 100 * 7 * 24 for row in rows), 1),
+    }
+    return {
+        "updated_at": max(row["recorded_at"] for row in rows).isoformat(timespec="seconds"),
+        "collector_interval_seconds": int(os.environ.get("ENERGY_COLLECTOR_INTERVAL_SECONDS", "60")),
+        "summary": {
+            "operational_efficiency": avg("operational_efficiency"),
+            "availability": availability,
+            "performance": performance,
+            "conformity": conformity,
+            "thermal_efficiency": avg("thermal_efficiency"),
+        },
+        "losses": losses,
+        "machines": machines,
+    }
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if "user_id" in session:
@@ -284,6 +334,15 @@ def index():
 @login_required
 def api_dashboard():
     return jsonify(dashboard_payload())
+
+
+@app.get("/api/thermal-efficiency")
+@login_required
+def api_thermal_efficiency():
+    try:
+        return jsonify(energy_efficiency_payload())
+    except RuntimeError as error:
+        return jsonify({"error": str(error)}), 404
 
 
 @app.get("/api/machines/<machine_id>")

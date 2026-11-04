@@ -18,7 +18,7 @@
         {% elif mode == 'reset' %}
           <span class="eyebrow">ENLACE SEGURO</span><h2>Define tu contraseña</h2><p class="intro">El enlace vence en 30 minutos y solo puede utilizarse una vez.</p>
         {% else %}
-          <span class="eyebrow">ACCESO SEGURO</span><h2>Bienvenido de nuevo</h2><p class="intro">Ingresa tus credenciales para acceder al dashboard.</p>
+          <span class="eyebrow">ACCESO SEGURO</span><h2>Energy AI Copilot</h2><p class="intro">Ingresa tus credenciales para acceder al dashboard.</p>
         {% endif %}
 
         {% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}

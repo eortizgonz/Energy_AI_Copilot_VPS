@@ -61,6 +61,21 @@ services:
     networks:
       - energy_backend
 
+  energy_collector:
+    image: energy-ai-copilot:latest
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+    depends_on:
+      app:
+        condition: service_healthy
+    command: ["python", "energy_collector.py"]
+    networks:
+      - energy_backend
+
 volumes:
   energy_postgres_data:
 

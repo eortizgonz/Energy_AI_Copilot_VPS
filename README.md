@@ -51,6 +51,20 @@ COLLECTOR_INTERVAL_SECONDS=60
 
 El argumento `--interval` puede reemplazar temporalmente este valor.
 
+El collector energético simula MW/MWh, consumo auxiliar, entrada térmica de
+combustible, disponibilidad, rendimiento, conformidad e índice operacional:
+
+```bash
+python energy_collector.py --once
+python energy_collector.py
+```
+
+```env
+ENERGY_COLLECTOR_INTERVAL_SECONDS=60
+```
+
+En Docker se ejecuta continuamente como el servicio `energy_collector`.
+
 ## Recuperación de contraseña con Gmail
 
 Configurar en `.env` una cuenta de Gmail con verificación en dos pasos y una
@@ -109,3 +123,8 @@ curl http://127.0.0.1:5080/login
 La base de datos, sus tablas y el catálogo inicial de las 10 máquinas se crean
 automáticamente antes de iniciar Gunicorn. El archivo `.env.production` está
 excluido de Git y no debe subirse al repositorio.
+
+El despliegue inicializa 18 tablas mediante migraciones idempotentes: seguridad,
+activos y telemetría predictiva, además del modelo operativo para productos,
+rutas, órdenes, lotes, turnos, ejecuciones, contadores, paradas, OEE y documentos
+SOP con embeddings de pgvector.
