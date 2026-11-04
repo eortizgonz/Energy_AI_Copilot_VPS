@@ -29,6 +29,8 @@ services:
     environment:
       PGHOST: db
       PGPORT: 5432
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       db:
         condition: service_healthy
@@ -73,6 +75,23 @@ services:
       app:
         condition: service_healthy
     command: ["python", "energy_collector.py"]
+    networks:
+      - energy_backend
+
+  rag_init:
+    image: energy-ai-copilot:latest
+    restart: "no"
+    env_file:
+      - .env.production
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      app:
+        condition: service_healthy
+    command: ["python", "ingest_energy_manuals.py", "--if-empty"]
     networks:
       - energy_backend
 

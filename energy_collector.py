@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import os
 import random
 import time
+from zoneinfo import ZoneInfo
 
 from app import get_db
 from telemetry_config import MACHINES
@@ -27,6 +28,17 @@ AUXILIARY_SHARE = {
 }
 
 
+def active_shift(shifts, timestamp):
+    local_time = timestamp.astimezone(ZoneInfo(os.environ.get("APP_TIMEZONE", "America/Bogota"))).time().replace(tzinfo=None)
+    for shift in shifts:
+        start, end = shift["start_time"], shift["end_time"]
+        if start < end and start <= local_time < end:
+            return shift
+        if start > end and (local_time >= start or local_time < end):
+            return shift
+    return None
+
+
 def collect_once(interval_seconds):
     timestamp = datetime.now(timezone.utc).replace(microsecond=0)
     rng = random.Random(int(timestamp.timestamp()) + 701)
@@ -44,6 +56,10 @@ def collect_once(interval_seconds):
                 ) h ON TRUE
                 WHERE m.active ORDER BY m.id"""
             ).fetchall()
+            shifts = db.execute("SELECT id,code,start_time,end_time FROM public.work_shifts WHERE active ORDER BY start_time").fetchall()
+            shift = active_shift(shifts, timestamp)
+            if not shift:
+                raise RuntimeError("No existe un turno activo para la hora de captura")
             inserted = 0
             for machine in machines:
                 risk = float(machine["risk_score"])
@@ -67,12 +83,12 @@ def collect_once(interval_seconds):
                     (machine_id,recorded_at,interval_seconds,rated_power_mw,planned_minutes,
                     operating_minutes,downtime_minutes,gross_generation_mwh,auxiliary_consumption_mwh,
                     net_generation_mwh,compliant_generation_mwh,fuel_energy_input_mwh,heat_rate_mj_kwh,
-                    thermal_efficiency,availability,performance,conformity,operational_efficiency,source)
-                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'simulator')
+                    thermal_efficiency,availability,performance,conformity,operational_efficiency,shift_id,source)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'simulator')
                     ON CONFLICT(machine_id,recorded_at) DO NOTHING RETURNING id""",
                     (machine["id"], timestamp, interval_seconds, rated_power, planned_minutes,
                      operating_minutes, downtime_minutes, gross, auxiliary, net, compliant, fuel_input,
-                     heat_rate, thermal_efficiency, availability, performance, conformity, operational),
+                     heat_rate, thermal_efficiency, availability, performance, conformity, operational, shift["id"]),
                 ).fetchone()
                 inserted += int(result is not None)
             db.execute(
@@ -80,7 +96,7 @@ def collect_once(interval_seconds):
                 readings_inserted=%s,machines_processed=%s WHERE id=%s""",
                 (inserted, len(machines), run_id),
             )
-            print(f"{timestamp.isoformat()} | máquinas={len(machines)} | lecturas energéticas={inserted}")
+            print(f"{timestamp.isoformat()} | turno={shift['code']} | máquinas={len(machines)} | lecturas energéticas={inserted}")
         except Exception as error:
             db.rollback()
             db.execute(

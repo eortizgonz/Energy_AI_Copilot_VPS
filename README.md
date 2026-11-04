@@ -65,6 +65,25 @@ ENERGY_COLLECTOR_INTERVAL_SECONDS=60
 
 En Docker se ejecuta continuamente como el servicio `energy_collector`.
 
+Las capturas energéticas se asignan automáticamente a tres turnos de 8 horas
+usando `APP_TIMEZONE=America/Bogota`: T1 (00:00–08:00), T2 (08:00–16:00) y
+T3 (16:00–00:00). La vista **Turno** compara energía neta, disponibilidad,
+rendimiento, conformidad, eficiencia térmica y tiempo de parada.
+
+## Documentación RAG de activos
+
+El proyecto genera un manual específico para cada una de las 10 máquinas con
+fallas probables, causas asociadas a variables dominantes, acciones recomendadas,
+seguridad y respuestas diferenciadas por rango de riesgo. Para indexarlos:
+
+```bash
+python ingest_energy_manuals.py
+```
+
+La recuperación semántica y el chat utilizan Ollama con `nomic-embed-text` y
+`llama3.1:8b`. En Docker, el servicio de una sola ejecución `rag_init` indexa los
+manuales cuando la base documental está vacía.
+
 ## Recuperación de contraseña con Gmail
 
 Configurar en `.env` una cuenta de Gmail con verificación en dos pasos y una

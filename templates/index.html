@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="Dashboard predictivo para activos de generación térmica">
   <title>Thermal AI · Analítica predictiva</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20261103-3') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20261104-2') }}">
 </head>
 <body>
 <div class="app-shell">
@@ -17,8 +17,10 @@
       <button class="nav-item active" data-section="predictive"><span>⌁</span><div>Analítica predictiva<small>Salud, riesgo y diagnóstico</small></div></button>
       <button class="nav-item" data-section="assets"><span>⚙</span><div>Activos térmicos<small>10 máquinas monitoreadas</small></div></button>
       <button class="nav-item" data-section="performance"><span>↗</span><div>Eficiencia térmica<small>Rendimiento y disponibilidad</small></div></button>
-      <button class="nav-item" data-section="alerts"><span>!</span><div>Alertas y órdenes<small>Prioridades de mantenimiento</small></div></button>
+      <button class="nav-item" data-section="shifts"><span>◷</span><div>Turno<small>Energía y desempeño</small></div></button>
     </nav>
+    <p class="nav-label">CONOCIMIENTO</p>
+    <nav><button class="nav-item" data-section="rag"><span>▤</span><div>Documentos RAG<small>Manuales, fallas y soluciones</small></div></button></nav>
     <div class="model-card"><span>MODELO ACTIVO</span><strong>Thermal-PdM v2.4</strong><small>Precisión validada 92.6%</small><div><i></i></div></div>
     <div class="sidebar-account"><div class="avatar">{{ session.user_name[:2]|upper }}</div><div class="account-copy"><strong>{{ session.user_name }}</strong><small>{{ session.user_role }}</small></div><a class="sidebar-logout" href="{{ url_for('logout') }}" title="Cerrar sesión">Salir</a></div>
   </aside>
@@ -34,8 +36,6 @@
 
       <section class="panel machines-panel dashboard-view" id="assets"><div class="panel-header"><div><span class="eyebrow dark">CONTROL DE ACTIVOS</span><h2>Diagnóstico por máquina</h2></div><div class="filters"><button class="active" data-filter="all">Todas</button><button data-filter="healthy">Saludables</button><button data-filter="warning">Alerta</button><button data-filter="critical">Críticas</button></div></div><div class="table-scroll"><table><thead><tr><th>MÁQUINA</th><th>USO</th><th>CONDICIÓN</th><th>TEMPERATURA</th><th>PROCESO</th><th>DESEMPEÑO</th><th>RIESGO</th><th>ESTADO</th><th></th></tr></thead><tbody id="machineRows"></tbody></table></div><div class="empty-state" id="emptyState" hidden>No hay máquinas en este estado.</div></section>
 
-      <section class="detail-grid dashboard-view" id="machineDetail"><article class="panel detail-card"><div class="panel-header"><div><span class="eyebrow dark">ACTIVO SELECCIONADO</span><h2 id="detailName">Selecciona una máquina</h2><p id="detailMeta"></p></div><span class="status-pill" id="detailStatus">—</span></div><div class="detail-metrics" id="detailMetrics"></div><div class="diagnosis"><small>DIAGNÓSTICO DEL MODELO</small><p id="detailDiagnosis">Usa “Ver detalle” para consultar un activo.</p></div></article><article class="panel factor-card"><span class="eyebrow dark">CONTRIBUCIÓN AL RIESGO</span><h2>Factores principales</h2><div id="factorBars" class="factor-bars"></div><div class="rul"><span>Horizonte estimado sin intervención</span><strong id="rulDays">— días</strong></div></article></section>
-
       <section class="thermal-view" id="performanceView" hidden>
         <div class="thermal-hero"><div><span class="eyebrow">EFICIENCIA TÉRMICA</span><h2>Desempeño integral del ciclo térmico</h2><p>Disponibilidad × rendimiento térmico × confiabilidad para los 10 activos monitoreados.</p></div><button id="thermalRefresh">Actualizar indicadores</button></div>
         <div class="thermal-legend"><strong>Interpretación:</strong><span><i class="excellent"></i>Cobre ≥ 85%</span><span><i class="good"></i>Naranja 75–84.9%</span><span><i class="watch"></i>Ámbar 60–74.9%</span><span><i class="poor"></i>Rojo &lt; 60%</span></div>
@@ -45,9 +45,32 @@
           <aside class="thermal-losses"><span class="eyebrow">PÉRDIDAS PRINCIPALES</span><h2>Brechas del indicador</h2><div class="loss-list"><div><label><b>Indisponibilidad</b><strong id="lossDowntime">—</strong></label><span><i id="lossDowntimeBar"></i></span></div><div><label><b>Brecha de generación</b><strong id="lossGeneration">—</strong></label><span><i id="lossGenerationBar"></i></span></div><div><label><b>Pérdida por degradación</b><strong id="lossDegradation">—</strong></label><span><i id="lossDegradationBar"></i></span></div></div><p>Indicadores estimados a partir de la telemetría predictiva. Las futuras órdenes, paradas y resultados OEE permitirán consolidar valores reales.</p></aside>
         </div>
       </section>
+
+      <section class="shift-view" id="shiftView" hidden>
+        <div class="shift-hero"><div><span class="eyebrow">OPERACIÓN DEL TURNO</span><h2>Seguimiento de generación térmica</h2><p>Energía, disponibilidad y desempeño operacional para los tres turnos de la central.</p></div><div><small id="shiftUpdated">Sin actualizar</small><button id="shiftRefresh">Actualizar turno</button></div></div>
+        <div class="shift-context"><div><span>TURNO ACTIVO</span><strong id="shiftActive">—</strong></div><div><span>HORARIO</span><strong id="shiftSchedule">—</strong></div><div><span>ZONA HORARIA</span><strong id="shiftTimezone">America/Bogota</strong></div><div><span>FUENTE</span><strong>Collector energético</strong></div></div>
+        <div class="shift-kpis"><article><span>ENERGÍA NETA</span><strong id="shiftEnergy">—</strong><small>Acumulada en lecturas del turno</small></article><article><span>ÍNDICE OPERACIONAL</span><strong id="shiftOperational">—</strong><small>Disponibilidad × rendimiento × conformidad</small></article><article><span>EFICIENCIA TÉRMICA</span><strong id="shiftThermal">—</strong><small>Energía útil vs. combustible</small></article><article><span>TIEMPO DE PARADA</span><strong id="shiftDowntime">—</strong><small>Acumulado de los activos</small></article></div>
+        <div class="shift-grid">
+          <article class="panel"><div class="panel-header"><div><span class="eyebrow dark">COMPARATIVO OPERACIONAL</span><h2>Indicadores por turno</h2></div><span>Últimas 24 horas</span></div><div class="shift-cards" id="shiftCards"></div></article>
+          <aside class="shift-efficiency"><span class="eyebrow">EFICIENCIA DEL TURNO ACTIVO</span><h2 id="shiftEfficiencyTitle">Esperando lecturas</h2><div id="shiftEfficiencyMetrics"></div><div class="shift-efficiency-track"><i id="shiftEfficiencyBar"></i></div><p id="shiftNote">El collector asigna cada captura según la hora local de Bogotá.</p></aside>
+        </div>
+      </section>
+
+      <section class="rag-view" id="ragView" hidden>
+        <div class="rag-hero"><div><span class="eyebrow">CONOCIMIENTO TÉRMICO</span><h2>Documentos RAG de los 10 activos</h2><p>Consulta fallas probables, causas según variables dominantes, soluciones y acciones seguras por rango de riesgo.</p></div><button id="ragRefresh">Actualizar documentos</button></div>
+        <div class="rag-layout">
+          <article class="rag-chat panel"><span class="eyebrow dark">COPILOTO DOCUMENTAL</span><h2>Consulta los manuales Energy</h2><form id="ragForm"><textarea id="ragQuestion" maxlength="2000" placeholder="Ej.: ¿Qué acciones se recomiendan para CAL-02 con temperatura metálica y CO elevados?" required></textarea><button type="submit" id="ragSubmit">Consultar RAG</button></form><div class="rag-answer" id="ragAnswer"><p>Formula una pregunta sobre operación, fallas, variables o mantenimiento de los activos.</p></div><div class="rag-sources" id="ragSources"></div></article>
+          <aside class="rag-documents"><span class="eyebrow">BASE DOCUMENTAL</span><h2>Manuales indexados</h2><div id="ragDocumentList"><p>Consultando documentos…</p></div><p>Los documentos generados son guías demostrativas. Deben validarse con manuales oficiales, Ingeniería, Operaciones, Mantenimiento y HSE.</p></aside>
+        </div>
+      </section>
+
+      <dialog class="machine-dialog" id="machineDialog">
+        <div class="machine-dialog-head"><div><span class="eyebrow">DIAGNÓSTICO MULTIVARIABLE</span><h2 id="machineDialogTitle">Detalle del activo</h2></div><button type="button" id="machineDialogClose" aria-label="Cerrar">×</button></div>
+        <div class="machine-dialog-body" id="machineDialogBody"><p>Cargando información…</p></div>
+      </dialog>
     </div>
   </main>
 </div>
-<script src="{{ url_for('static', filename='app.js', v='20261103-3') }}"></script>
+<script src="{{ url_for('static', filename='app.js', v='20261104-2') }}"></script>
 </body>
 </html>
