@@ -474,10 +474,23 @@ document.getElementById("machineDialogClose").addEventListener("click", () => do
 document.getElementById("machineDialog").addEventListener("click", event => {
   if (event.target === event.currentTarget) event.currentTarget.close();
 });
-document.getElementById("menuToggle").addEventListener("click", () => document.querySelector(".sidebar").classList.toggle("open"));
+function setSidebar(open) {
+  document.querySelector(".sidebar").classList.toggle("open", open);
+  document.getElementById("menuToggle").setAttribute("aria-expanded", String(open));
+  document.body.classList.toggle("menu-open", open);
+}
+
+document.getElementById("menuToggle").addEventListener("click", () => setSidebar(!document.querySelector(".sidebar").classList.contains("open")));
+document.getElementById("sidebarScrim").addEventListener("click", () => setSidebar(false));
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape") {
+    setSidebar(false);
+    document.getElementById("aiChat").classList.remove("open");
+  }
+});
 document.querySelectorAll(".nav-item").forEach(button => button.addEventListener("click", () => {
   document.querySelectorAll(".nav-item").forEach(item => item.classList.toggle("active", item === button));
-  document.querySelector(".sidebar").classList.remove("open");
+  setSidebar(false);
   const section = button.dataset.section;
   showView(section === "performance" ? "performance" : section === "shifts" ? "shifts" : section === "downtime" ? "downtime" : section === "rag" ? "rag" : "predictive", false);
 }));

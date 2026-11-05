@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="Dashboard predictivo para activos de generación térmica">
   <title>Thermal AI · Analítica predictiva</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20261104-3') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20261105-1') }}">
 </head>
 <body>
 <div class="app-shell">
@@ -24,9 +24,10 @@
     <div class="model-card"><span>MODELO ACTIVO</span><strong>Thermal-PdM v2.4</strong><small>Precisión validada 92.6%</small><div><i></i></div></div>
     <div class="sidebar-account"><div class="avatar">{{ session.user_name[:2]|upper }}</div><div class="account-copy"><strong>{{ session.user_name }}</strong><small>{{ session.user_role }}</small></div><a class="sidebar-logout" href="{{ url_for('logout') }}" title="Cerrar sesión">Salir</a></div>
   </aside>
+  <button class="sidebar-scrim" id="sidebarScrim" type="button" aria-label="Cerrar menú"></button>
 
   <main id="top">
-    <header class="topbar"><button class="menu-toggle" id="menuToggle" aria-label="Abrir menú">☰</button><div><p id="headerPath">OPERACIÓN / ANALÍTICA PREDICTIVA</p><h1 id="headerTitle">Salud de generación térmica</h1></div><div class="header-actions"><span class="system-ok"><i></i> Sistemas en línea</span></div></header>
+    <header class="topbar"><button class="menu-toggle" id="menuToggle" aria-label="Abrir menú" aria-expanded="false">☰</button><div><p id="headerPath">OPERACIÓN / ANALÍTICA PREDICTIVA</p><h1 id="headerTitle">Salud de generación térmica</h1></div><div class="header-actions"><span class="system-ok"><i></i> Sistemas en línea</span></div></header>
     <div class="content">
       <section class="hero dashboard-view"><div><span class="eyebrow">RESUMEN PREDICTIVO</span><h2>Inteligencia para anticipar fallas</h2><p>Monitoreo multivariable de 10 activos críticos del ciclo de generación térmica.</p></div><div class="hero-actions"><small id="updatedAt">Cargando última lectura…</small><button id="refreshButton">Consultar base de datos</button></div><div class="weights"><span><b>125</b> variables</span><span>Condición mecánica</span><span>Proceso térmico</span><span>Desempeño</span><span>Química y ciclo de vida</span></div></section>
 
@@ -87,6 +88,6 @@
   <div class="ai-messages" id="aiMessages"><div class="ai-message assistant">Hola. Pregunta por riesgo predictivo, telemetría, eficiencia térmica, paradas, turnos o documentación técnica. Consultaré los datos actuales y la base vectorial.</div></div>
   <form class="ai-compose" id="aiForm"><textarea id="aiQuestion" minlength="5" maxlength="2000" placeholder="Ej.: ¿Cuál activo tiene mayor riesgo y cómo afecta la eficiencia del turno?" required></textarea><button type="submit" id="aiSend">Consultar con IA</button></form>
 </aside>
-<script src="{{ url_for('static', filename='app.js', v='20261104-6') }}"></script>
+<script src="{{ url_for('static', filename='app.js', v='20261105-1') }}"></script>
 </body>
 </html>
